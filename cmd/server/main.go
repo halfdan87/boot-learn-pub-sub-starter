@@ -2,10 +2,16 @@ package main
 
 import (
 	"fmt"
+
+	"github.com/bootdotdev/learn-pub-sub-starter/internal/gamelogic"
+	"github.com/bootdotdev/learn-pub-sub-starter/internal/pubsub"
+	"github.com/bootdotdev/learn-pub-sub-starter/internal/routing"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
 func main() {
+	gamelogic.PrintServerHelp()
+
 	connectionString := "amqp://guest:guest@localhost:5672/"
 	conn, err := amqp.Dial(connectionString)
 	if err != nil {
@@ -21,41 +27,29 @@ func main() {
 	}
 	defer ch.Close()
 
-	q, err := ch.QueueDeclare(
-		"peril_topic", // name
-		false,         // durable
-		false,         // delete when unused
-		false,         // exclusive
-		false,         // no-wait
-		nil,           // arguments
-	)
-	if err != nil {
-		fmt.Println("Error declaring queue:", err)
-		return
-	}
+	pubsub.DeclareAndBind(conn, routing.ExchangePerilTopic, "game_logs", routing.GameLogSlug+".*", pubsub.DurableQueue)
 
-	msgs, err := ch.Consume(
-		q.Name, // queue
-		"",     // consumer
-		false,  // auto-ack
-		false,  // exclusive
-		false,  // no-local
-		false,  // no-wait
-		nil,    // args
-	)
-	if err != nil {
-		fmt.Println("Error consuming:", err)
-		return
-	}
-
-	forever := make(chan bool)
-
-	go func() {
-		for d := range msgs {
-			fmt.Printf("Received a message: %s\n", d.Body)
+	for {
+		input := gamelogic.GetInput()
+		if len(input) == 0 {
+			continue
 		}
-	}()
 
-	fmt.Println("Waiting for messages. To exit press CTRL+C")
-	<-forever
+		if input[0] == "pause" {
+			fmt.Println("Pausing the game...")
+			data := routing.PlayingState{IsPaused: true}
+			pubsub.PublishJSON(ch, routing.ExchangePerilDirect, routing.PauseKey, data)
+		}
+		if input[0] == "resume" {
+			fmt.Println("Resuming the game...")
+			data := routing.PlayingState{IsPaused: false}
+			pubsub.PublishJSON(ch, routing.ExchangePerilDirect, routing.PauseKey, data)
+		}
+		if input[0] == "quit" {
+			fmt.Println("Quitting the game...")
+			break
+		}
+
+		gamelogic.PrintServerHelp()
+	}
 }
