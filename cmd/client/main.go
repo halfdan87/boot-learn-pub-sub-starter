@@ -46,6 +46,18 @@ func main() {
 		return
 	}
 
+	_, _, err = pubsub.DeclareAndBind(conn, routing.ExchangePerilTopic, routing.ArmyMovesPrefix+"."+name, routing.ArmyMovesPrefix+".*", pubsub.TransientQueue)
+	if err != nil {
+		fmt.Println("Error declaring and binding queue:", err)
+		return
+	}
+
+	err = pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, routing.ArmyMovesPrefix+"."+name, "*", pubsub.TransientQueue, handlerMove(gamestate))
+	if err != nil {
+		fmt.Println("Error subscribing to queue:", err)
+		return
+	}
+
 	for {
 		words := gamelogic.GetInput()
 		if len(words) == 0 {
@@ -99,6 +111,24 @@ func main() {
 }
 
 func handlerPause(gs *gamelogic.GameState) func(routing.PlayingState) {
-	defer fmt.Print("> ")
-	return gs.HandlePause
+	return func(ps routing.PlayingState) {
+		defer fmt.Print("> ")
+		gs.HandlePause(ps)
+	}
+
+}
+
+func handlerMove(gs *gamelogic.GameState) func(move gamelogic.ArmyMove) {
+	return func(move gamelogic.ArmyMove) {
+		defer fmt.Print("> ")
+		result := gs.HandleMove(move)
+		switch result {
+		case gamelogic.MoveOutComeSafe:
+			fmt.Println("You are safe from the attack!")
+		case gamelogic.MoveOutcomeMakeWar:
+			fmt.Println("You have been attacked! You are at war with the attacker!")
+		case gamelogic.MoveOutcomeSamePlayer:
+			fmt.Println("You are already at war with the attacker!")
+		}
+	}
 }
