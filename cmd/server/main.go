@@ -27,7 +27,7 @@ func main() {
 	}
 	defer ch.Close()
 
-	pubsub.DeclareAndBind(conn, routing.ExchangePerilTopic, "game_logs", routing.GameLogSlug+".*", pubsub.DurableQueue)
+	pubsub.DeclareAndBind(conn, routing.ExchangePerilTopic, routing.GameLogSlug, routing.GameLogSlug+".*", pubsub.DurableQueue)
 
 	for {
 		input := gamelogic.GetInput()

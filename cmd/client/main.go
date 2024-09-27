@@ -53,13 +53,13 @@ func main() {
 		return
 	}
 
-	err = pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, routing.ArmyMovesPrefix+"."+name, "*", pubsub.TransientQueue, handlerMove(gamestate, ch))
+	err = pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, routing.ArmyMovesPrefix+"."+name, routing.ArmyMovesPrefix+".*", pubsub.TransientQueue, handlerMove(gamestate, ch))
 	if err != nil {
 		fmt.Println("Error subscribing to queue:", err)
 		return
 	}
 
-	err = pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix, "*", pubsub.DurableQueue, handlerRecognition(gamestate))
+	err = pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix, routing.WarRecognitionsPrefix+".*", pubsub.DurableQueue, handlerRecognition(gamestate, ch))
 	if err != nil {
 		fmt.Println("Error subscribing to queue:", err)
 		return
@@ -82,7 +82,7 @@ func main() {
 				fmt.Println(err)
 				continue
 			}
-			pubsub.PublishJSON(ch, routing.ExchangePerilTopic, routing.ArmyMovesPrefix, mv)
+			pubsub.PublishJSON(ch, routing.ExchangePerilTopic, routing.ArmyMovesPrefix+"."+name, mv)
 			continue
 		}
 		if words[0] == "status" {
@@ -135,7 +135,6 @@ func handlerMove(gs *gamelogic.GameState, ch *amqp.Channel) func(move gamelogic.
 			return pubsub.Ack
 		case gamelogic.MoveOutcomeMakeWar:
 			fmt.Println("You have been attacked! You are at war with the attacker!")
-			// TODO: publish war recognition
 			recognition := gamelogic.RecognitionOfWar{
 				Attacker: gs.Player,
 				Defender: move.Player,
@@ -155,28 +154,43 @@ func handlerMove(gs *gamelogic.GameState, ch *amqp.Channel) func(move gamelogic.
 	}
 }
 
-func handlerRecognition(gs *gamelogic.GameState) func(recognition gamelogic.RecognitionOfWar) pubsub.AckType {
+func handlerRecognition(gs *gamelogic.GameState, ch *amqp.Channel) func(recognition gamelogic.RecognitionOfWar) pubsub.AckType {
 	return func(recognition gamelogic.RecognitionOfWar) pubsub.AckType {
 		defer fmt.Print("> ")
 		outcome, winner, loser := gs.HandleWar(recognition)
+		gamelog := routing.GameLog{
+			Username: gs.Player.Username,
+		}
+
+		defer func() {
+			fmt.Printf("Publishing game log: %v\n", gamelog)
+			err := pubsub.PublishGob(ch, routing.ExchangePerilTopic, routing.GameLogSlug+"."+gs.Player.Username, gamelog)
+			if err != nil {
+				fmt.Println("Error publishing game log:", err)
+				return
+			}
+		}()
+
 		switch outcome {
 		case gamelogic.WarOutcomeYouWon:
-			fmt.Printf("%s has won the war!\n", winner)
+			gamelog.Message = fmt.Sprintf("%s won a war against %s", winner, loser)
 			return pubsub.Ack
 		case gamelogic.WarOutcomeOpponentWon:
-			fmt.Printf("%s has won the war!\n", loser)
+			gamelog.Message = fmt.Sprintf("%s won a war against %s", winner, loser)
 			return pubsub.Ack
 		case gamelogic.WarOutcomeDraw:
-			fmt.Println("The war ended in a draw!")
+			gamelog.Message = fmt.Sprintf("A war between %s and %s resulted in a draw", winner, loser)
 			return pubsub.Ack
 		case gamelogic.WarOutcomeNotInvolved:
+			//gamelog.Message = "Not involved in this war."
 			fmt.Println("Not involved in this war.")
-			return pubsub.Ack
+			return pubsub.NackRequeue
 		case gamelogic.WarOutcomeNoUnits:
-			fmt.Println("No units in the same location. No war will be fought.")
+			//gamelog.Message = "No units in the same location. No war will be fought."
 			return pubsub.NackDiscard
 		}
 		fmt.Printf("Unknown war outcome: %v\n", outcome)
+		gamelog.Message = fmt.Sprintf("Unknown war outcome: %v", outcome)
 		return pubsub.NackDiscard
 	}
 }

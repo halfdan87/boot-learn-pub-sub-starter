@@ -1,7 +1,9 @@
 package pubsub
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 
@@ -125,5 +127,29 @@ func SubscribeJSON[T any](conn *amqp.Connection, exchange, queueName, bindingKey
 		}
 	}()
 
+	return nil
+}
+
+func PublishGob[T any](ch *amqp.Channel, exchange, routingKey string, msg T) error {
+	var buffer bytes.Buffer
+	err := gob.NewEncoder(&buffer).Encode(msg)
+	if err != nil {
+		return fmt.Errorf("error marshalling message: %v", err)
+	}
+
+	err = ch.PublishWithContext(
+		context.Background(),
+		exchange,   // exchange
+		routingKey, // routing key
+		false,      // mandatory
+		false,      // immediate
+		amqp.Publishing{
+			ContentType: "application/gob",
+			Body:        buffer.Bytes(),
+		})
+
+	if err != nil {
+		return fmt.Errorf("error publishing message: %v", err)
+	}
 	return nil
 }
