@@ -27,7 +27,7 @@ func main() {
 	}
 	defer ch.Close()
 
-	pubsub.DeclareAndBind(conn, routing.ExchangePerilTopic, routing.GameLogSlug, routing.GameLogSlug+".*", pubsub.DurableQueue)
+	pubsub.SubscribeGob(conn, routing.ExchangePerilTopic, routing.GameLogSlug, routing.GameLogSlug+".*", pubsub.DurableQueue, handlerGameLog())
 
 	for {
 		input := gamelogic.GetInput()
@@ -51,5 +51,13 @@ func main() {
 		}
 
 		gamelogic.PrintServerHelp()
+	}
+}
+
+func handlerGameLog() func(gamelog routing.GameLog) pubsub.AckType {
+	return func(gamelog routing.GameLog) pubsub.AckType {
+		defer fmt.Print("> ")
+		gamelogic.WriteLog(gamelog)
+		return pubsub.Ack
 	}
 }

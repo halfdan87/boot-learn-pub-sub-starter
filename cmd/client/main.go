@@ -108,7 +108,11 @@ func main() {
 				continue
 			}
 			for i := 0; i < n; i++ {
-				pubsub.PublishJSON(ch, routing.ExchangePerilTopic, routing.GameLogSlug+"."+name, gamelogic.GetMaliciousLog())
+				gamelog := routing.GameLog{
+					Message:  gamelogic.GetMaliciousLog(),
+					Username: name,
+				}
+				pubsub.PublishGob(ch, routing.ExchangePerilTopic, routing.GameLogSlug+"."+name, gamelog)
 			}
 			continue
 		}

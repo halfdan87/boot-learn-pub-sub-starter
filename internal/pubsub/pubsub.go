@@ -153,3 +153,61 @@ func PublishGob[T any](ch *amqp.Channel, exchange, routingKey string, msg T) err
 	}
 	return nil
 }
+
+func SubscribeGob[T any](conn *amqp.Connection, exchange, queueName, bindingKey string, simpleQueueType QueueType, handler func(T) AckType) error {
+	ch, err := conn.Channel()
+	if err != nil {
+		return fmt.Errorf("error creating channel: %v", err)
+	}
+
+	_, q, err := DeclareAndBind(conn, exchange, queueName, bindingKey, simpleQueueType)
+	if err != nil {
+		return fmt.Errorf("error declaring and binding queue: %v", err)
+	}
+
+	ch.Qos(10, 0, false)
+
+	msgs, err := ch.Consume(
+		q.Name, // queue
+		"",     // consumer
+		false,  // auto-ack
+		false,  // exclusive
+		false,  // no-local
+		false,  // no-wait
+		nil,    // args
+	)
+	if err != nil {
+		return fmt.Errorf("error consuming: %v", err)
+	}
+
+	go func() {
+		for d := range msgs {
+			if d.ContentType != "application/gob" {
+				fmt.Printf("Error: content type is not application/gob: %v\n", d.ContentType)
+				d.Nack(false, false)
+				continue
+			}
+			var msg T
+			err := gob.NewDecoder(bytes.NewReader(d.Body)).Decode(&msg)
+			if err != nil {
+				fmt.Printf("Error unmarshalling message: %v\n", err)
+				d.Nack(false, false)
+				continue
+			}
+			ackType := handler(msg)
+			switch ackType {
+			case Ack:
+				println("Acking message")
+				d.Ack(false)
+			case NackRequeue:
+				println("Nacking message and requeueing")
+				d.Nack(false, true)
+			case NackDiscard:
+				println("Nacking message and discarding")
+				d.Nack(false, false)
+			}
+		}
+	}()
+
+	return nil
+}
