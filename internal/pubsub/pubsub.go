@@ -43,7 +43,7 @@ func DeclareAndBind(conn *amqp.Connection, exchange, queueName, bindingKey strin
 		simpleQueueType == TransientQueue, // delete when unused
 		simpleQueueType == TransientQueue, // exclusive
 		false,                             // no-wait
-		nil,                               // arguments
+		amqp.Table{"x-dead-letter-exchange": "peril_dlx"},
 	)
 	if err != nil {
 		return nil, amqp.Queue{}, fmt.Errorf("error declaring queue: %v", err)
@@ -70,7 +70,15 @@ const (
 	DurableQueue
 )
 
-func SubscribeJSON[T any](conn *amqp.Connection, exchange, queueName, bindingKey string, simpleQueueType QueueType, handler func(T)) error {
+type AckType int
+
+const (
+	Ack AckType = iota
+	NackRequeue
+	NackDiscard
+)
+
+func SubscribeJSON[T any](conn *amqp.Connection, exchange, queueName, bindingKey string, simpleQueueType QueueType, handler func(T) AckType) error {
 	ch, err := conn.Channel()
 	if err != nil {
 		return fmt.Errorf("error creating channel: %v", err)
@@ -102,8 +110,18 @@ func SubscribeJSON[T any](conn *amqp.Connection, exchange, queueName, bindingKey
 				fmt.Printf("Error unmarshalling message: %v\n", err)
 				continue
 			}
-			handler(msg)
-			d.Ack(false)
+			ackType := handler(msg)
+			switch ackType {
+			case Ack:
+				println("Acking message")
+				d.Ack(false)
+			case NackRequeue:
+				println("Nacking message and requeueing")
+				d.Nack(false, true)
+			case NackDiscard:
+				println("Nacking message and discarding")
+				d.Nack(false, false)
+			}
 		}
 	}()
 

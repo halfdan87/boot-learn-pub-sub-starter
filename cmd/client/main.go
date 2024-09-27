@@ -2,11 +2,12 @@ package main
 
 import (
 	"fmt"
+	"strconv"
+
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/gamelogic"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/pubsub"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/routing"
 	amqp "github.com/rabbitmq/amqp091-go"
-	"strconv"
 )
 
 func main() {
@@ -52,7 +53,13 @@ func main() {
 		return
 	}
 
-	err = pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, routing.ArmyMovesPrefix+"."+name, "*", pubsub.TransientQueue, handlerMove(gamestate))
+	err = pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, routing.ArmyMovesPrefix+"."+name, "*", pubsub.TransientQueue, handlerMove(gamestate, ch))
+	if err != nil {
+		fmt.Println("Error subscribing to queue:", err)
+		return
+	}
+
+	err = pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix, "*", pubsub.DurableQueue, handlerRecognition(gamestate))
 	if err != nil {
 		fmt.Println("Error subscribing to queue:", err)
 		return
@@ -110,25 +117,66 @@ func main() {
 	}
 }
 
-func handlerPause(gs *gamelogic.GameState) func(routing.PlayingState) {
-	return func(ps routing.PlayingState) {
+func handlerPause(gs *gamelogic.GameState) func(routing.PlayingState) pubsub.AckType {
+	return func(ps routing.PlayingState) pubsub.AckType {
 		defer fmt.Print("> ")
 		gs.HandlePause(ps)
+		return pubsub.Ack
 	}
-
 }
 
-func handlerMove(gs *gamelogic.GameState) func(move gamelogic.ArmyMove) {
-	return func(move gamelogic.ArmyMove) {
+func handlerMove(gs *gamelogic.GameState, ch *amqp.Channel) func(move gamelogic.ArmyMove) pubsub.AckType {
+	return func(move gamelogic.ArmyMove) pubsub.AckType {
 		defer fmt.Print("> ")
 		result := gs.HandleMove(move)
 		switch result {
 		case gamelogic.MoveOutComeSafe:
 			fmt.Println("You are safe from the attack!")
+			return pubsub.Ack
 		case gamelogic.MoveOutcomeMakeWar:
 			fmt.Println("You have been attacked! You are at war with the attacker!")
+			// TODO: publish war recognition
+			recognition := gamelogic.RecognitionOfWar{
+				Attacker: gs.Player,
+				Defender: move.Player,
+			}
+			fmt.Printf("Publishing war recognition: %v\n", recognition)
+			err := pubsub.PublishJSON(ch, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix+"."+gs.Player.Username, recognition)
+			if err != nil {
+				fmt.Println("Error publishing war recognition:", err)
+				return pubsub.NackRequeue
+			}
+			return pubsub.Ack
 		case gamelogic.MoveOutcomeSamePlayer:
 			fmt.Println("You are already at war with the attacker!")
+			return pubsub.NackDiscard
 		}
+		return pubsub.NackDiscard
+	}
+}
+
+func handlerRecognition(gs *gamelogic.GameState) func(recognition gamelogic.RecognitionOfWar) pubsub.AckType {
+	return func(recognition gamelogic.RecognitionOfWar) pubsub.AckType {
+		defer fmt.Print("> ")
+		outcome, winner, loser := gs.HandleWar(recognition)
+		switch outcome {
+		case gamelogic.WarOutcomeYouWon:
+			fmt.Printf("%s has won the war!\n", winner)
+			return pubsub.Ack
+		case gamelogic.WarOutcomeOpponentWon:
+			fmt.Printf("%s has won the war!\n", loser)
+			return pubsub.Ack
+		case gamelogic.WarOutcomeDraw:
+			fmt.Println("The war ended in a draw!")
+			return pubsub.Ack
+		case gamelogic.WarOutcomeNotInvolved:
+			fmt.Println("Not involved in this war.")
+			return pubsub.Ack
+		case gamelogic.WarOutcomeNoUnits:
+			fmt.Println("No units in the same location. No war will be fought.")
+			return pubsub.NackDiscard
+		}
+		fmt.Printf("Unknown war outcome: %v\n", outcome)
+		return pubsub.NackDiscard
 	}
 }
